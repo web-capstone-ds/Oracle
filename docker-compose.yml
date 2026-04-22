@@ -1,0 +1,38 @@
+version: '3.8'
+
+services:
+  oracle-db:
+    image: timescale/timescaledb:latest-pg16
+    container_name: ds_oracle_db
+    environment:
+      POSTGRES_DB: oracle
+      POSTGRES_USER: oracle
+      POSTGRES_PASSWORD: oracle_secret
+    ports:
+      - "5433:5432"
+    volumes:
+      - oracle_db_data:/var/lib/postgresql/data
+      - ./sql/01_create_rule_tables.sql:/docker-entrypoint-initdb.d/01_create_rule_tables.sql
+      - ./sql/02_seed_default_thresholds.sql:/docker-entrypoint-initdb.d/02_seed_default_thresholds.sql
+      - ./sql/03_create_judgment_table.sql:/docker-entrypoint-initdb.d/03_create_judgment_table.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U oracle"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  oracle:
+    build: .
+    container_name: ds_oracle
+    depends_on:
+      oracle-db:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      ORACLE_DB_HOST: oracle-db
+      ORACLE_DB_PORT: 5432
+      MQTT_BROKER_HOST: broker
+    restart: unless-stopped
+
+volumes:
+  oracle_db_data:
