@@ -25,7 +25,7 @@ dev = [
 ]
 
 [project.scripts]
-ds-oracle = "main:run"
+ds-oracle = "main:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

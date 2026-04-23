@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git *)",
+      "Bash(python -m pip install -e \".[dev]\")",
+      "Bash(command -v py python3 python)",
+      "Bash(py -3 --version)",
+      "Bash(where python.exe)",
+      "Bash(py -3 -m pip install -e \".[dev]\")",
+      "Bash(py -3 -m pytest -x -q)",
+      "Bash(py *)"
+    ]
+  }
+}
