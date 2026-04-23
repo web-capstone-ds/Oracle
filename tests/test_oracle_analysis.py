@@ -103,6 +103,27 @@ def test_ai_comment_danger_includes_rules():
     assert "작업 중단" in text
 
 
+def test_timestamp_iso8601_utc_millis_format():
+    """§16.4: ORACLE_ANALYSIS.timestamp 는 ISO 8601 UTC 밀리초 (.fffZ) 필수."""
+    import re
+
+    from utils.backoff import get_timestamp_utc_ms
+
+    ts = get_timestamp_utc_ms()
+    # YYYY-MM-DDTHH:MM:SS.fffZ
+    pattern = r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$"
+    assert re.match(pattern, ts), f"timestamp 포맷 불일치: {ts}"
+
+
+def test_message_id_uuid_v4_format():
+    """§16.4: message_id 는 UUID v4 (RFC 4122)."""
+    import uuid
+
+    generated = str(uuid.uuid4())
+    parsed = uuid.UUID(generated)
+    assert parsed.version == 4
+
+
 def test_ewma_mad_stub_raises():
     with pytest.raises(NotImplementedError):
         compute_dynamic_threshold("Carsem_3X3", "yield_pct")

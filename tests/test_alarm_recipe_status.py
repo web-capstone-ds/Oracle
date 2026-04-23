@@ -22,6 +22,7 @@ def _cache() -> RuleCache:
             RuleThreshold("R26", "cam_timeout_daily_count", 1.0, 3.0, "gte"),
             RuleThreshold("R29", "light_pwr_low_consecutive", 1.0, 3.0, "gte"),
             RuleThreshold("R31", "numeric_recipe_id", None, 1.0, "eq"),
+            RuleThreshold("R33", "aggex_daily_count", 1.0, 5.0, "gte"),
             RuleThreshold("R38c", "status_abnormal_transition", None, 1.0, "eq"),
         ],
     )
@@ -77,6 +78,27 @@ async def test_cam_timeout_critical_via_alarm_counter():
     )
     r26 = [v for v in violations if v.rule_id == "R26"]
     assert r26 and r26[0].level == RuleLevel.CRITICAL
+
+
+@pytest.mark.asyncio
+async def test_aggex_lotcontroller_daily_critical():
+    """§16.2: VISION_SCORE_ERR + LotController 키워드 5건/일 → DANGER (R33 CRITICAL)."""
+    cache = _cache()
+    counter = AlarmCounterCache()
+    ts = datetime.now(timezone.utc)
+    for _ in range(5):
+        counter.record_aggex("DS-VIS-001", ts)  # R33 전용 카운터
+    violations = await alarm_rules.evaluate_alarm_rules(
+        equipment_id="DS-VIS-001",
+        alarm_counter=counter,
+        rule_cache=cache,
+        recipe_id=DEFAULT_RECIPE,
+        at=ts,
+    )
+    r33 = [v for v in violations if v.rule_id == "R33"]
+    assert r33, "R33 violation expected"
+    assert r33[0].level == RuleLevel.CRITICAL
+    assert r33[0].actual_value == 5.0
 
 
 def test_chain_escalation_lightpwr_side_et52():

@@ -159,6 +159,49 @@ async def test_side_et52_full_fail_danger(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_carsem_4x6_yield_68_5_danger(monkeypatch):
+    """§5.5 두 번째 예시: Carsem_4X6 수율 68.5% → R23 CRITICAL (lte 90.0) → DANGER.
+
+    v1.0 __default__ 고정 임계값(WARNING=95, CRITICAL=90, comparison_op=lte) 적용.
+    """
+    _patch_historian_empty(monkeypatch)
+    engine = _engine()
+    result = await engine.judge_lot_end(_lot(68.5, "COMPLETED"))
+    assert result.judgment == Judgment.DANGER
+    r23 = [v for v in result.violated_rules if v.rule_id == "R23"]
+    assert r23 and r23[0].yield_grade == "CRITICAL"
+
+
+@pytest.mark.asyncio
+async def test_r38c_run_to_stop_no_alarm_integration(monkeypatch):
+    """§16.2: RUN→STOP 무경고 전환 후 LOT_END → DANGER (R38c).
+
+    judge_lot_end 흐름에서 status_rules.evaluate_abnormal_transition 가 호출되어
+    transitions[]의 마지막 RUN→STOP을 발견하고 선행 알람이 없으면 CRITICAL.
+    """
+    from datetime import timedelta
+
+    _patch_historian_empty(monkeypatch)
+
+    eq = EquipmentCache()
+    base_ts = datetime.now(timezone.utc)
+    eq.update_status("DS-VIS-001", "RUN", DEFAULT_RECIPE, "v1", "OP1", "L1", 100, base_ts)
+    eq.update_status(
+        "DS-VIS-001", "STOP", DEFAULT_RECIPE, "v1", "OP1", "L1", 110,
+        base_ts + timedelta(seconds=1),
+    )
+    engine = RuleEngine(
+        equipment_cache=eq,
+        alarm_counter=AlarmCounterCache(),
+        lot_history=LotHistoryCache(),
+        rule_cache=_full_default_cache(),
+    )
+    result = await engine.judge_lot_end(_lot(96.0, "COMPLETED"))
+    assert result.judgment == Judgment.DANGER
+    assert any(v.rule_id == "R38c" for v in result.violated_rules)
+
+
+@pytest.mark.asyncio
 async def test_historian_unavailable_fallback(monkeypatch):
     """Historian 장애 시 Unit-level Rules 스킵 + 판정 자체는 진행 → 크래시 금지."""
 
