@@ -9,7 +9,7 @@ services:
       POSTGRES_USER: oracle
       POSTGRES_PASSWORD: oracle_secret
     ports:
-      - "5433:5432"
+      - "5434:5432"
     volumes:
       - oracle_db_data:/var/lib/postgresql/data
       - ./sql/01_create_rule_tables.sql:/docker-entrypoint-initdb.d/01_create_rule_tables.sql

@@ -7,6 +7,9 @@ O10에서 Graceful Shutdown과 전체 파이프라인 배선이 완성된다.
 from __future__ import annotations
 
 import asyncio
+import selectors
+asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
 import signal
 
 from config import settings
