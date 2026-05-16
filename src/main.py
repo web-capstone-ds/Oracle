@@ -49,6 +49,10 @@ async def run() -> None:
 
 
 def main() -> None:
+    # Windows에서 psycopg async 호환을 위해 SelectorEventLoop 강제 설정
+    import sys
+    if sys.platform == "win32":
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     try:
         asyncio.run(run())
     except KeyboardInterrupt:
