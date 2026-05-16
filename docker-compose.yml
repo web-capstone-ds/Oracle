@@ -31,8 +31,12 @@ services:
     environment:
       ORACLE_DB_HOST: oracle-db
       ORACLE_DB_PORT: 5432
-      MQTT_BROKER_HOST: broker
+      MQTT_BROKER_HOST: ds-mosquitto-broker
     restart: unless-stopped
 
 volumes:
   oracle_db_data:
+
+networks:
+  ds-network:
+    external: true
