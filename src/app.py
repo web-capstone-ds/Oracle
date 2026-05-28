@@ -28,7 +28,6 @@ from cache.rule_cache import DEFAULT_RECIPE, RuleCache
 from config import settings
 from db import rule_db
 from db.pool import close_pools, open_pools
-from engine.comment_generator import generate_ai_comment
 from engine.rule_engine import JudgmentResult, RuleEngine
 from models.events import HwAlarm, LotEnd, RecipeChanged, StatusUpdate
 from models.judgment import Judgment
@@ -188,13 +187,6 @@ class OracleApp:
             )
             return
 
-        ai_comment = generate_ai_comment(
-            judgment=result.judgment,
-            lot_id=result.lot_id,
-            yield_pct=result.yield_pct,
-            violated_rules=result.violated_rules,
-            yield_grade=result.yield_grade,
-        )
         yield_threshold = self.rule_cache.get_threshold(result.recipe_id, "R23")
         payload = build_oracle_analysis_payload(
             message_id=result.message_id,
@@ -206,8 +198,9 @@ class OracleApp:
             yield_actual=result.yield_pct,
             yield_threshold=yield_threshold,
             lot_basis=yield_threshold.lot_basis if yield_threshold else 0,
-            ai_comment=ai_comment,
+            ai_comment=result.ai_comment,
             violated_rules=result.violated_rules,
+            lot_report=result.lot_report,
         )
 
         # 발행 (QoS 2 + Retained=true)
@@ -227,7 +220,7 @@ class OracleApp:
                 judgment=result.judgment.value,
                 yield_actual=result.yield_pct,
                 violated_rules=[v.to_payload() for v in result.violated_rules],
-                ai_comment=ai_comment,
+                ai_comment=result.ai_comment,
                 payload_raw=payload,
             )
         except Exception as exc:

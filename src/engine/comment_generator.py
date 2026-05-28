@@ -6,6 +6,8 @@ Oracle 작업명세서 §5.4 규칙을 따른다.
 
 from __future__ import annotations
 
+from engine.comment.base import CommentContext
+from engine.comment.template_generator import TemplateCommentGenerator
 from models.judgment import Judgment, RuleLevel, ViolatedRule
 
 
@@ -17,35 +19,17 @@ def generate_ai_comment(
     violated_rules: list[ViolatedRule],
     yield_grade: str | None,
 ) -> str:
-    if judgment == Judgment.NORMAL:
-        grade = f" ({yield_grade})" if yield_grade else ""
-        return (
-            f"LOT {lot_id} 정상 완료. 수율 {yield_pct:.1f}%{grade}, 전 Rule 정상 범위."
+    return TemplateCommentGenerator().generate(
+        CommentContext(
+            judgment=judgment,
+            lot_id=lot_id,
+            yield_pct=yield_pct,
+            violated_rules=violated_rules,
+            yield_grade=yield_grade,
+            fail_top_reason=None,
+            marginal_count=0,
+            recipe_id="",
         )
-
-    rules_str = ", ".join(_unique_preserve_order(r.rule_id for r in violated_rules))
-    grade_label = _yield_label(yield_grade, yield_pct)
-
-    if judgment == Judgment.WARNING:
-        return (
-            f"LOT {lot_id} 주의. 수율 {yield_pct:.1f}%{grade_label}. "
-            f"위반 Rule: {rules_str}. 오퍼레이터 확인 필요."
-        )
-
-    # DANGER
-    chain_notes = [
-        v.extras.get("escalated_by")
-        for v in violated_rules
-        if v.extras and v.extras.get("escalated_by")
-    ]
-    chain_part = ""
-    if chain_notes:
-        chain_part = " 연쇄 패턴 감지: " + " / ".join(_unique_preserve_order(chain_notes)) + "."
-    crit_count = sum(1 for v in violated_rules if v.level == RuleLevel.CRITICAL)
-    return (
-        f"LOT {lot_id} 위험. 수율 {yield_pct:.1f}%{grade_label}. "
-        f"위반 Rule: {rules_str} (CRITICAL {crit_count}건).{chain_part} "
-        "즉시 점검 + 작업 중단 권고."
     )
 
 

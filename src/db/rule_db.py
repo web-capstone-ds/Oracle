@@ -21,15 +21,30 @@ async def load_thresholds(recipe_id: str) -> list[RuleThreshold]:
     pool = oracle_pool()
     async with pool.connection() as conn:
         async with conn.cursor() as cur:
-            await cur.execute(
-                """
-                SELECT rule_id, metric, warning_threshold, critical_threshold,
-                       comparison_op, enabled, lot_basis, approved_by
-                FROM rule_thresholds
-                WHERE recipe_id = %s AND enabled = true
-                """,
-                (recipe_id,),
-            )
+            try:
+                await cur.execute(
+                    """
+                    SELECT rule_id, metric, warning_threshold, critical_threshold,
+                           comparison_op, enabled, lot_basis, approved_by,
+                           marginal_min, marginal_max
+                    FROM rule_thresholds
+                    WHERE recipe_id = %s AND enabled = true
+                    """,
+                    (recipe_id,),
+                )
+            except Exception:
+                await conn.rollback()
+                await cur.execute(
+                    """
+                    SELECT rule_id, metric, warning_threshold, critical_threshold,
+                           comparison_op, enabled, lot_basis, approved_by,
+                           NULL::double precision AS marginal_min,
+                           NULL::double precision AS marginal_max
+                    FROM rule_thresholds
+                    WHERE recipe_id = %s AND enabled = true
+                    """,
+                    (recipe_id,),
+                )
             rows = await cur.fetchall()
     return [
         RuleThreshold(
@@ -41,6 +56,8 @@ async def load_thresholds(recipe_id: str) -> list[RuleThreshold]:
             enabled=r[5],
             lot_basis=r[6] or 0,
             approved_by=r[7],
+            marginal_min=r[8],
+            marginal_max=r[9],
         )
         for r in rows
     ]

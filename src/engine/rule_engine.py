@@ -24,10 +24,16 @@ from cache.equipment_cache import EquipmentCache
 from cache.lot_history import LotHistoryCache
 from cache.rule_cache import DEFAULT_RECIPE, RuleCache
 from db import historian_queries, rule_db
-from db.historian_queries import HistorianUnavailable
+from db.historian_queries import HistorianUnavailable, InspectionRow
+from engine.comment import get_comment_generator
+from engine.comment.base import CommentContext
+from engine.fail_aggregator import aggregate_fail_distribution
+from engine.marginal_detector import detect_marginal_units
+from engine.recommendation_engine import RecommendationEngine
 from engine import alarm_rules, lot_rules, recipe_rules, status_rules, unit_rules
 from models.events import LotEnd, RecipeChanged
 from models.judgment import Judgment, ViolatedRule, level_to_judgment, worst
+from models.lot_report import LotReport, LotReportSummary, MarginalUnitInfo, ReportTransparency
 from utils.logging_config import get_logger
 
 log = get_logger(__name__)
@@ -43,6 +49,8 @@ class JudgmentResult:
     judgment: Judgment
     violated_rules: list[ViolatedRule] = field(default_factory=list)
     yield_grade: str | None = None
+    ai_comment: str = ""
+    lot_report: LotReport | None = None
 
 
 class RuleEngine:
@@ -58,6 +66,8 @@ class RuleEngine:
         self.alarm_counter = alarm_counter
         self.lot_history = lot_history
         self.rule_cache = rule_cache
+        self._recommender = RecommendationEngine()
+        self._comment_gen = get_comment_generator()
 
     # ──────────────────────────────────────────────────────
     # Rule 캐시 로드 (RECIPE_CHANGED / LOT_END 호출)
@@ -144,11 +154,14 @@ class RuleEngine:
         # (인메모리에서는 End만 집계, 보정은 Historian lot_ends ↔ status 전환 비교)
 
         # ── Unit-level Rules ────────────────────────────
+        rows: list[InspectionRow] = []
+        historian_available = True
         try:
             rows = await historian_queries.fetch_lot_inspection_results(lot.lot_id, equipment_id)
             agg = unit_rules.aggregate_inspections(rows)
             violations.extend(unit_rules.evaluate_unit_rules(agg, self.rule_cache, recipe_id))
         except HistorianUnavailable as exc:
+            historian_available = False
             log.warning(
                 "historian_unavailable_unit_rules_skipped",
                 lot_id=lot.lot_id,
@@ -182,6 +195,29 @@ class RuleEngine:
 
         # ── 최고 심각도 채택 ─────────────────────────────
         judgment = worst(*(level_to_judgment(v.level) for v in violations)) if violations else Judgment.NORMAL
+        lot_report = self._build_lot_report(
+            lot=lot,
+            records=rows,
+            thresholds=self._thresholds_for(recipe_id),
+            violated_rules=violations,
+            judgment=judgment,
+            yield_grade=yield_grade,
+            recipe_id=recipe_id,
+            historian_available=historian_available,
+        )
+        ai_comment = self._build_ai_comment(
+            lot=lot,
+            judgment=judgment,
+            violated_rules=violations,
+            yield_grade=yield_grade,
+            fail_top_reason=(
+                lot_report.fail_distribution[0].description
+                if lot_report and lot_report.fail_distribution
+                else None
+            ),
+            marginal_count=lot_report.marginal_units.count if lot_report else 0,
+            recipe_id=recipe_id,
+        )
 
         return JudgmentResult(
             message_id=str(uuid.uuid4()),
@@ -192,6 +228,8 @@ class RuleEngine:
             judgment=judgment,
             violated_rules=violations,
             yield_grade=yield_grade,
+            ai_comment=ai_comment,
+            lot_report=lot_report,
         )
 
     def _fallback_recipe(self, lot: LotEnd) -> str:
@@ -202,3 +240,110 @@ class RuleEngine:
             equipment_id=lot.equipment_id,
         )
         return DEFAULT_RECIPE
+
+    def _build_lot_report(
+        self,
+        *,
+        lot: LotEnd,
+        records: list[InspectionRow],
+        thresholds: dict,
+        violated_rules: list[ViolatedRule],
+        judgment: Judgment,
+        yield_grade: str | None,
+        recipe_id: str,
+        historian_available: bool,
+    ) -> LotReport | None:
+        if not historian_available:
+            return None
+        try:
+            summary = self._build_summary(lot, records, marginal_count=0)
+            empty_marginal = MarginalUnitInfo(count=0, ratio_pct=0.0, top_parameters=[])
+            if lot.lot_status == "ABORTED":
+                return LotReport(
+                    summary=summary,
+                    fail_distribution=[],
+                    marginal_units=empty_marginal,
+                    recommendations=[],
+                    transparency=self._transparency(lot_basis=0),
+                )
+
+            fail_distribution = aggregate_fail_distribution(records)
+            marginal_units = detect_marginal_units(records, thresholds)
+            summary = self._build_summary(lot, records, marginal_count=marginal_units.count)
+            recommendations = self._recommender.generate(
+                violated_rules=violated_rules,
+                fail_distribution=fail_distribution,
+                marginal_units=marginal_units,
+                context={
+                    "yield_pct": float(lot.yield_pct),
+                    "recipe_id": recipe_id,
+                    "judgment": judgment.value,
+                    "yield_grade": yield_grade,
+                },
+            )
+            return LotReport(
+                summary=summary,
+                fail_distribution=fail_distribution,
+                marginal_units=marginal_units,
+                recommendations=recommendations,
+                transparency=self._transparency(lot_basis=0),
+            )
+        except Exception as exc:
+            log.error("lot_report_build_failed", lot_id=lot.lot_id, error=str(exc), exc_info=True)
+            return None
+
+    def _build_summary(
+        self,
+        lot: LotEnd,
+        records: list[InspectionRow],
+        *,
+        marginal_count: int,
+    ) -> LotReportSummary:
+        total_units = int(lot.total_units or len(records))
+        duration_sec = int(lot.lot_duration_sec or 0)
+        uph = int(round(total_units / (duration_sec / 3600.0))) if duration_sec > 0 else 0
+        return LotReportSummary(
+            total_units=total_units,
+            pass_count=int(lot.pass_count),
+            fail_count=int(lot.fail_count),
+            marginal_count=marginal_count,
+            yield_pct=round(float(lot.yield_pct), 2),
+            duration_sec=duration_sec,
+            uph=uph,
+        )
+
+    def _build_ai_comment(
+        self,
+        *,
+        lot: LotEnd,
+        judgment: Judgment,
+        violated_rules: list[ViolatedRule],
+        yield_grade: str | None,
+        fail_top_reason: str | None,
+        marginal_count: int,
+        recipe_id: str,
+    ) -> str:
+        return self._comment_gen.generate(
+            CommentContext(
+                judgment=judgment,
+                lot_id=lot.lot_id,
+                yield_pct=float(lot.yield_pct),
+                violated_rules=violated_rules,
+                yield_grade=yield_grade,
+                fail_top_reason=fail_top_reason,
+                marginal_count=marginal_count,
+                recipe_id=recipe_id,
+            )
+        )
+
+    def _thresholds_for(self, recipe_id: str) -> dict:
+        thresholds = self.rule_cache.get(DEFAULT_RECIPE) or {}
+        thresholds.update(self.rule_cache.get(recipe_id) or {})
+        return thresholds
+
+    def _transparency(self, *, lot_basis: int) -> ReportTransparency:
+        return ReportTransparency(
+            rule_db_version="v2.4",
+            lot_basis=lot_basis,
+            basis_note="고정 임계값 사용 중. 2차 검증 미활성 (Phase 2 예정)",
+        )

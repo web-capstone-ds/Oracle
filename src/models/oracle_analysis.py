@@ -13,6 +13,7 @@ from typing import Any
 
 from cache.rule_cache import RuleThreshold
 from models.judgment import Judgment, ViolatedRule
+from models.lot_report import LotReport
 
 
 def build_oracle_analysis_payload(
@@ -28,6 +29,7 @@ def build_oracle_analysis_payload(
     lot_basis: int,
     ai_comment: str,
     violated_rules: list[ViolatedRule],
+    lot_report: LotReport | None = None,
 ) -> dict[str, Any]:
     """Mock 23~25 구조 호환 ORACLE_ANALYSIS 페이로드 생성."""
     payload: dict[str, Any] = {
@@ -43,6 +45,7 @@ def build_oracle_analysis_payload(
         "threshold_proposal": None,
         "isolation_forest_score": None,
         "violated_rules": [v.to_payload() for v in violated_rules],
+        "lot_report": lot_report.model_dump(mode="json") if lot_report else None,
     }
     return payload
 

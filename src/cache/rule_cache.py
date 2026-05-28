@@ -24,6 +24,8 @@ class RuleThreshold:
     enabled: bool = True
     lot_basis: int = 0
     approved_by: str | None = None
+    marginal_min: float | None = None
+    marginal_max: float | None = None
 
 
 @dataclass
