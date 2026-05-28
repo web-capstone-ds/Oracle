@@ -30,6 +30,9 @@ def build_oracle_analysis_payload(
     ai_comment: str,
     violated_rules: list[ViolatedRule],
     lot_report: LotReport | None = None,
+    dynamic_threshold: dict[str, Any] | None = None,
+    isolation_forest_score: float | None = None,
+    threshold_proposal: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Mock 23~25 구조 호환 ORACLE_ANALYSIS 페이로드 생성."""
     payload: dict[str, Any] = {
@@ -40,10 +43,15 @@ def build_oracle_analysis_payload(
         "lot_id": lot_id,
         "recipe_id": recipe_id,
         "judgment": judgment.value,
-        "yield_status": _yield_status(yield_actual, yield_threshold, lot_basis),
+        "yield_status": _yield_status(
+            yield_actual,
+            yield_threshold,
+            lot_basis,
+            dynamic_threshold=dynamic_threshold,
+        ),
         "ai_comment": ai_comment,
-        "threshold_proposal": None,
-        "isolation_forest_score": None,
+        "threshold_proposal": threshold_proposal,
+        "isolation_forest_score": isolation_forest_score,
         "violated_rules": [v.to_payload() for v in violated_rules],
         "lot_report": lot_report.model_dump(mode="json") if lot_report else None,
     }
@@ -54,7 +62,14 @@ def _yield_status(
     actual: float,
     yield_threshold: RuleThreshold | None,
     lot_basis: int,
+    dynamic_threshold: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    if dynamic_threshold is not None:
+        return {
+            "actual": float(actual),
+            "dynamic_threshold": dynamic_threshold,
+            "lot_basis": int(lot_basis),
+        }
     warn = yield_threshold.warning_threshold if yield_threshold else 95.0
     crit = yield_threshold.critical_threshold if yield_threshold else 90.0
     return {

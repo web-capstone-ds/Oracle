@@ -80,6 +80,13 @@ class StatusUpdate(_Base):
     current_yield_pct: float | None = None
 
 
+class ControlCommand(_Base):
+    event_type: Literal["CONTROL_CMD"]
+    command: str
+    payload: dict[str, Any] = Field(default_factory=dict)
+    issued_by: str | None = None
+
+
 def parse_event(raw: dict[str, Any]) -> _Base | None:
     event_type = raw.get("event_type")
     if event_type == "LOT_END":
@@ -90,4 +97,8 @@ def parse_event(raw: dict[str, Any]) -> _Base | None:
         return RecipeChanged.model_validate(raw)
     if event_type == "STATUS_UPDATE":
         return StatusUpdate.model_validate(raw)
+    if event_type == "CONTROL_CMD":
+        if raw.get("command") in {"APPROVE_THRESHOLD", "REJECT_THRESHOLD"}:
+            return ControlCommand.model_validate(raw)
+        return None
     return None

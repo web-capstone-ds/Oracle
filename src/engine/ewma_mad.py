@@ -1,19 +1,16 @@
-"""EWMA + MAD 동적 임계값 산출 (2차 검증 스텁).
+"""EWMA + MAD dynamic threshold calculation.
 
 Oracle 작업명세서 §2.1 / 오라클 2차 검증 기획안 §2 참조.
 
-v1.0에서는 인터페이스만 제공한다. 실제 모델 학습/추론은 2차 검증 활성화 시 구현한다.
-
-설계 의도:
-  - 레시피별 독립 학습 (DEFAULT_RECIPE 폴백 없음)
-  - EWMA 평균 + 표준편차로 동적 정상 구간 [μ-2σ, μ+2σ] 계산
-  - MAD (Median Absolute Deviation) 로 robust 이상치 감지
-  - rule_thresholds.lot_basis ≥ N (예: 8 LOT) 충족 시 활성화
+Phase 2 activates recipe-local dynamic boundaries. Histories are passed in
+newest-to-oldest order; the calculation reverses them so newer values receive
+the larger EWMA weight.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+import statistics
 
 
 @dataclass(frozen=True)
@@ -36,9 +33,10 @@ def compute_dynamic_threshold(
     recipe_id: str,
     metric: str,
     *,
-    history: list[float] | None = None,
+    history: list[float],
     smoothing_alpha: float = 0.3,
     sigma_multiplier: float = 2.0,
+    direction: str = "two_sided",
 ) -> DynamicThreshold:
     """레시피별 metric 시계열로부터 동적 임계값을 산출한다.
 
@@ -56,9 +54,65 @@ def compute_dynamic_threshold(
 
     Raises
     ------
-    NotImplementedError
-        2차 검증 모듈 활성화 전까지 항상 발생.
+    ValueError
+        If fewer than 5 LOTs are available.
     """
-    raise NotImplementedError(
-        "EWMA+MAD 2차 검증 모듈은 v1.0 범위 밖 — Oracle 2차 검증 기획안 §2 구현 필요"
+    if len(history) < 5:
+        raise ValueError(f"EWMA 활성 조건 미달: {len(history)} < 5 LOT")
+    if not 0 < smoothing_alpha <= 1:
+        raise ValueError("smoothing_alpha must be in (0, 1]")
+
+    ordered = [float(v) for v in reversed(history)]
+    ewma = ordered[0]
+    for value in ordered[1:]:
+        ewma = smoothing_alpha * value + (1 - smoothing_alpha) * ewma
+
+    std = statistics.stdev(history) if len(history) >= 2 else 0.0
+    median = statistics.median(history)
+    mad = statistics.median([abs(float(x) - median) for x in history])
+    mad_std = mad * 1.4826
+    effective_std = min(std, mad_std) if mad_std > 0 else std
+
+    warning_band = sigma_multiplier * effective_std
+    danger_band = (sigma_multiplier + 1) * effective_std
+
+    if direction == "higher_better":
+        return DynamicThreshold(
+            metric=metric,
+            recipe_id=recipe_id,
+            normal_min=ewma - warning_band,
+            normal_max=None,
+            warning_min=ewma - danger_band,
+            warning_max=ewma - warning_band,
+            lot_basis=len(history),
+            ewma_mean=ewma,
+            ewma_std=effective_std,
+            mad=mad,
+        )
+    if direction == "lower_better":
+        return DynamicThreshold(
+            metric=metric,
+            recipe_id=recipe_id,
+            normal_min=None,
+            normal_max=ewma + warning_band,
+            warning_min=ewma + warning_band,
+            warning_max=ewma + danger_band,
+            lot_basis=len(history),
+            ewma_mean=ewma,
+            ewma_std=effective_std,
+            mad=mad,
+        )
+    if direction != "two_sided":
+        raise ValueError(f"Unknown direction: {direction}")
+    return DynamicThreshold(
+        metric=metric,
+        recipe_id=recipe_id,
+        normal_min=ewma - warning_band,
+        normal_max=ewma + warning_band,
+        warning_min=ewma - danger_band,
+        warning_max=ewma + danger_band,
+        lot_basis=len(history),
+        ewma_mean=ewma,
+        ewma_std=effective_std,
+        mad=mad,
     )

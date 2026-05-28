@@ -15,7 +15,7 @@ import json
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from models.events import HwAlarm, LotEnd, RecipeChanged, StatusUpdate, parse_event
+from models.events import ControlCommand, HwAlarm, LotEnd, RecipeChanged, StatusUpdate, parse_event
 from mqtt.client import MqttManager
 from utils.logging_config import get_logger
 
@@ -27,6 +27,7 @@ SubscribeTopics: list[tuple[str, int]] = [
     ("ds/+/alarm", 2),
     ("ds/+/recipe", 2),
     ("ds/+/status", 1),
+    ("ds/+/control", 2),
 ]
 
 
@@ -34,6 +35,7 @@ LotEndHandler = Callable[[LotEnd, str], Awaitable[None]]
 AlarmHandler = Callable[[HwAlarm, str], Awaitable[None]]
 RecipeHandler = Callable[[RecipeChanged, str], Awaitable[None]]
 StatusHandler = Callable[[StatusUpdate, str], Awaitable[None]]
+ControlHandler = Callable[[ControlCommand, str], Awaitable[None]]
 
 
 class Subscriber:
@@ -45,6 +47,7 @@ class Subscriber:
         self._alarm: AlarmHandler | None = None
         self._recipe: RecipeHandler | None = None
         self._status: StatusHandler | None = None
+        self._control: ControlHandler | None = None
 
     def on_lot_end(self, handler: LotEndHandler) -> None:
         self._lot_end = handler
@@ -57,6 +60,9 @@ class Subscriber:
 
     def on_status(self, handler: StatusHandler) -> None:
         self._status = handler
+
+    def on_control(self, handler: ControlHandler) -> None:
+        self._control = handler
 
     def attach(self) -> None:
         for topic, qos in SubscribeTopics:
@@ -111,6 +117,8 @@ class Subscriber:
                 await self._recipe(event, equipment_id)
             elif isinstance(event, StatusUpdate) and self._status:
                 await self._status(event, equipment_id)
+            elif isinstance(event, ControlCommand) and self._control:
+                await self._control(event, equipment_id)
         except Exception as exc:
             log.error(
                 "mqtt_handler_exception",

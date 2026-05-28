@@ -11,3 +11,4 @@ env/
 *.log
 dist/
 build/
+model_cache/

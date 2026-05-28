@@ -36,6 +36,7 @@ class Settings(BaseSettings):
 
     rule_cache_ttl_sec: int = 300
     shutdown_timeout_sec: float = 5.0
+    oracle_model_dir: str = "model_cache"
 
     log_level: str = "INFO"
     log_format: str = Field(default="json", pattern="^(json|console)$")

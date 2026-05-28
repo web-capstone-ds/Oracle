@@ -124,11 +124,11 @@ def test_message_id_uuid_v4_format():
     assert parsed.version == 4
 
 
-def test_ewma_mad_stub_raises():
-    with pytest.raises(NotImplementedError):
-        compute_dynamic_threshold("Carsem_3X3", "yield_pct")
+def test_ewma_mad_requires_minimum_history():
+    with pytest.raises(ValueError):
+        compute_dynamic_threshold("Carsem_3X3", "yield_pct", history=[96.2] * 4)
 
 
-def test_isolation_forest_stub_raises():
-    with pytest.raises(NotImplementedError):
+def test_isolation_forest_requires_minimum_history():
+    with pytest.raises(ValueError):
         compute_anomaly_score({"yield_pct": 96.2}, recipe_id="Carsem_3X3")

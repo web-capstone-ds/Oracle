@@ -29,7 +29,8 @@ from config import settings
 from db import rule_db
 from db.pool import close_pools, open_pools
 from engine.rule_engine import JudgmentResult, RuleEngine
-from models.events import HwAlarm, LotEnd, RecipeChanged, StatusUpdate
+from handlers.threshold_approval import handle_threshold_approval, handle_threshold_rejection
+from models.events import ControlCommand, HwAlarm, LotEnd, RecipeChanged, StatusUpdate
 from models.judgment import Judgment
 from models.oracle_analysis import build_oracle_analysis_payload
 from mqtt.client import MqttManager
@@ -81,6 +82,7 @@ class OracleApp:
         self.subscriber.on_alarm(self._on_alarm)
         self.subscriber.on_recipe(self._on_recipe)
         self.subscriber.on_status(self._on_status)
+        self.subscriber.on_control(self._on_control)
         self.subscriber.attach()
 
         await self.mqtt.start()
@@ -162,6 +164,16 @@ class OracleApp:
             rule_ids=[v.rule_id for v in violations],
         )
 
+    async def _on_control(self, event: ControlCommand, equipment_id: str) -> None:
+        payload = dict(event.payload or {})
+        payload.setdefault("operator_id", event.issued_by)
+        if event.command == "APPROVE_THRESHOLD":
+            await handle_threshold_approval(payload)
+        elif event.command == "REJECT_THRESHOLD":
+            await handle_threshold_rejection(payload)
+        else:
+            log.debug("control_command_ignored", command=event.command, equipment_id=equipment_id)
+
     async def _on_lot_end(self, event: LotEnd, equipment_id: str) -> None:
         if self._stopping:
             log.warning("lot_end_dropped_stopping", lot_id=event.lot_id)
@@ -197,11 +209,20 @@ class OracleApp:
             judgment=result.judgment,
             yield_actual=result.yield_pct,
             yield_threshold=yield_threshold,
-            lot_basis=yield_threshold.lot_basis if yield_threshold else 0,
+            lot_basis=result.lot_basis or (yield_threshold.lot_basis if yield_threshold else 0),
             ai_comment=result.ai_comment,
             violated_rules=result.violated_rules,
             lot_report=result.lot_report,
+            dynamic_threshold=result.dynamic_threshold,
+            isolation_forest_score=result.isolation_forest_score,
+            threshold_proposal=result.threshold_proposal,
         )
+
+        if result.threshold_proposal:
+            try:
+                await rule_db.insert_threshold_proposal(result.threshold_proposal)
+            except Exception as exc:
+                log.warning("threshold_proposal_insert_failed", lot_id=lot.lot_id, error=str(exc))
 
         # 발행 (QoS 2 + Retained=true)
         try:

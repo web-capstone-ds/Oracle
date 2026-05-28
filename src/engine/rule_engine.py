@@ -30,6 +30,7 @@ from engine.comment.base import CommentContext
 from engine.fail_aggregator import aggregate_fail_distribution
 from engine.marginal_detector import detect_marginal_units
 from engine.recommendation_engine import RecommendationEngine
+from engine.secondary_validator import SecondaryResult, combine_judgments, validate_secondary
 from engine import alarm_rules, lot_rules, recipe_rules, status_rules, unit_rules
 from models.events import LotEnd, RecipeChanged
 from models.judgment import Judgment, ViolatedRule, level_to_judgment, worst
@@ -51,6 +52,10 @@ class JudgmentResult:
     yield_grade: str | None = None
     ai_comment: str = ""
     lot_report: LotReport | None = None
+    dynamic_threshold: dict | None = None
+    isolation_forest_score: float | None = None
+    threshold_proposal: dict | None = None
+    lot_basis: int = 0
 
 
 class RuleEngine:
@@ -193,8 +198,28 @@ class RuleEngine:
         # ── 연쇄 감지: LIGHT_PWR_LOW + SIDE ET=52 상승 → 1단계 상향 ──
         alarm_rules.apply_chain_escalation(violations)
 
-        # ── 최고 심각도 채택 ─────────────────────────────
-        judgment = worst(*(level_to_judgment(v.level) for v in violations)) if violations else Judgment.NORMAL
+        # ── 최고 심각도 채택 (1차) ───────────────────────
+        primary_judgment = (
+            worst(*(level_to_judgment(v.level) for v in violations))
+            if violations
+            else Judgment.NORMAL
+        )
+        secondary = await self._validate_secondary_safe(
+            lot=lot,
+            records=rows,
+            recipe_id=recipe_id,
+            historian_available=historian_available,
+        )
+        judgment = (
+            combine_judgments(
+                primary_violated_rules=violations,
+                ewma_judgment=secondary.ewma_judgment,
+                if_judgment=secondary.if_judgment,
+                lot_basis=secondary.lot_basis,
+            )
+            if secondary is not None
+            else primary_judgment
+        )
         lot_report = self._build_lot_report(
             lot=lot,
             records=rows,
@@ -205,6 +230,9 @@ class RuleEngine:
             recipe_id=recipe_id,
             historian_available=historian_available,
         )
+        if lot_report and secondary is not None:
+            lot_report.transparency.lot_basis = secondary.lot_basis
+            lot_report.transparency.basis_note = self._build_basis_note(secondary)
         ai_comment = self._build_ai_comment(
             lot=lot,
             judgment=judgment,
@@ -230,6 +258,10 @@ class RuleEngine:
             yield_grade=yield_grade,
             ai_comment=ai_comment,
             lot_report=lot_report,
+            dynamic_threshold=secondary.dynamic_threshold if secondary else None,
+            isolation_forest_score=secondary.isolation_forest_score if secondary else None,
+            threshold_proposal=secondary.threshold_proposal if secondary else None,
+            lot_basis=secondary.lot_basis if secondary else 0,
         )
 
     def _fallback_recipe(self, lot: LotEnd) -> str:
@@ -347,3 +379,57 @@ class RuleEngine:
             lot_basis=lot_basis,
             basis_note="고정 임계값 사용 중. 2차 검증 미활성 (Phase 2 예정)",
         )
+
+    async def _validate_secondary_safe(
+        self,
+        *,
+        lot: LotEnd,
+        records: list[InspectionRow],
+        recipe_id: str,
+        historian_available: bool,
+    ) -> SecondaryResult | None:
+        if not historian_available:
+            return None
+        try:
+            alarm_snapshot = {
+                "CAM_TIMEOUT_ERR": {
+                    "daily_count": self.alarm_counter.snapshot(
+                        lot.equipment_id,
+                        "CAM_TIMEOUT_ERR",
+                        lot.timestamp,
+                    ).daily_count
+                }
+            }
+            secondary = await validate_secondary(
+                lot,
+                records,
+                alarm_snapshot,
+                recipe_id=recipe_id,
+            )
+            try:
+                from db import lot_history
+
+                await lot_history.insert_lot_history(
+                    lot_id=lot.lot_id,
+                    equipment_id=lot.equipment_id,
+                    recipe_id=recipe_id,
+                    lot_end_time=lot.timestamp,
+                    yield_pct=float(lot.yield_pct),
+                    total_units=int(lot.total_units),
+                    fail_count=int(lot.fail_count),
+                    lot_duration_sec=int(lot.lot_duration_sec),
+                    features=secondary.features,
+                )
+            except Exception as exc:
+                log.warning("lot_history_insert_skipped", lot_id=lot.lot_id, error=str(exc))
+            return secondary
+        except Exception as exc:
+            log.warning("secondary_validation_skipped", lot_id=lot.lot_id, error=str(exc))
+            return None
+
+    def _build_basis_note(self, secondary: SecondaryResult) -> str:
+        if secondary.learning_status == "seeding":
+            return "시딩 단계: 5 LOT 미만으로 2차 검증 미활성"
+        if secondary.learning_status == "ewma_active":
+            return f"EWMA+MAD 활성: {secondary.lot_basis} LOT 기반 동적 임계값 사용"
+        return f"EWMA+MAD + Isolation Forest 활성: {secondary.lot_basis} LOT 기반"
