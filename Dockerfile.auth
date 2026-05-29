@@ -1,0 +1,6 @@
+FROM python:3.11-slim
+WORKDIR /app
+COPY pyproject.toml ./
+RUN pip install bcrypt python-jose[cryptography] fastapi uvicorn psycopg[binary]
+COPY auth/ ./auth/
+CMD ["uvicorn", "auth.main:app", "--host", "127.0.0.1", "--port", "8443"]

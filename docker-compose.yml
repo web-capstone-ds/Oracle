@@ -15,6 +15,7 @@ services:
       - ./sql/01_create_rule_tables.sql:/docker-entrypoint-initdb.d/01_create_rule_tables.sql
       - ./sql/02_seed_default_thresholds.sql:/docker-entrypoint-initdb.d/02_seed_default_thresholds.sql
       - ./sql/03_create_judgment_table.sql:/docker-entrypoint-initdb.d/03_create_judgment_table.sql
+      - ./sql/07_create_local_user_replica.sql:/docker-entrypoint-initdb.d/07_create_local_user_replica.sql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U oracle"]
       interval: 5s
@@ -32,6 +33,19 @@ services:
       ORACLE_DB_HOST: oracle-db
       ORACLE_DB_PORT: 5432
       MQTT_BROKER_HOST: host.docker.internal
+    restart: unless-stopped
+
+  auth-service:
+    build:
+      context: .
+      dockerfile: Dockerfile.auth
+    container_name: ds_auth_service
+    ports:
+      - "127.0.0.1:8443:8443"
+    env_file: .env
+    environment:
+      AUTH_DB_HOST: oracle-db
+      AUTH_DB_PORT: 5432
     restart: unless-stopped
 
 volumes:
