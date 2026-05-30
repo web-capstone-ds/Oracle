@@ -1,6 +1,28 @@
-FROM python:3.11-slim
+FROM python:3.11-slim AS runtime
+
 WORKDIR /app
+
+ENV VIRTUAL_ENV=/app/.venv \
+    PATH="/app/.venv/bin:$PATH" \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app:/app/src
+
 COPY pyproject.toml ./
-RUN pip install bcrypt python-jose[cryptography] fastapi uvicorn psycopg[binary]
+COPY src ./src
 COPY auth/ ./auth/
+
+RUN python -m venv "$VIRTUAL_ENV" \
+ && pip install --no-cache-dir --upgrade pip \
+ && pip install --no-cache-dir .
+
 CMD ["uvicorn", "auth.main:app", "--host", "0.0.0.0", "--port", "8443"]
+
+FROM runtime AS test
+
+COPY tests ./tests
+
+RUN pip install --no-cache-dir -e '.[dev]'
+
+CMD ["python", "-m", "pytest", "tests/test_auth_api.py"]
+
+FROM runtime AS final
