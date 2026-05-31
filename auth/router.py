@@ -12,6 +12,10 @@ class LoginRequest(BaseModel):
 
 class LoginResponse(BaseModel):
     token: str
+    operatorId: str
+    name: str | None = None
+    department: str | None = None
+    phone: str | None = None
     role: str
     expiresIn: int
 
@@ -30,6 +34,10 @@ async def login(request: LoginRequest):
     token = create_access_token(user["operator_id"], user["role"])
     return LoginResponse(
         token=token,
+        operatorId=user["operator_id"],
+        name=user.get("name"),
+        department=user.get("department"),
+        phone=user.get("phone"),
         role=user["role"],
         expiresIn=28800 # 8 hours
     )

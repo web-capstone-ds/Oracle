@@ -13,7 +13,8 @@ async def get_user(operator_id: str) -> dict | None:
     async with await psycopg.AsyncConnection.connect(conn_str, row_factory=dict_row) as conn:
         async with conn.cursor() as cur:
             await cur.execute(
-                "SELECT operator_id, password_hash, role, active FROM local_user_replica WHERE operator_id = %s",
+                "SELECT operator_id, password_hash, name, department, phone, role, active "
+                "FROM local_user_replica WHERE operator_id = %s",
                 (operator_id,)
             )
             return await cur.fetchone()
