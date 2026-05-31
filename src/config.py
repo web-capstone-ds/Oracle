@@ -34,6 +34,11 @@ class Settings(BaseSettings):
     historian_db_pool_min: int = 1
     historian_db_pool_max: int = 5
 
+    # Web-Backend 단방향 인증 스냅샷 동기화
+    web_backend_url: str = "http://localhost:8080"
+    auth_snapshot_cert_path: str = ""   # mTLS 클라이언트 인증서 경로 (미설정 시 인증 없이 내부망 전용)
+    auth_snapshot_interval_sec: int = 300  # 5분마다 증분 동기화
+
     rule_cache_ttl_sec: int = 300
     shutdown_timeout_sec: float = 5.0
     oracle_model_dir: str = "model_cache"

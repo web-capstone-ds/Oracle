@@ -27,6 +27,7 @@ from cache.lot_history import LotHistoryCache
 from cache.rule_cache import DEFAULT_RECIPE, RuleCache
 from config import settings
 from db import rule_db
+from db.auth_sync import run_sync_loop
 from db.pool import close_pools, open_pools
 from engine.rule_engine import JudgmentResult, RuleEngine
 from handlers.threshold_approval import handle_threshold_approval, handle_threshold_rejection
@@ -64,6 +65,8 @@ class OracleApp:
 
         self._pending: set[asyncio.Task] = set()
         self._stopping = False
+        self._sync_stop = asyncio.Event()
+        self._sync_task: asyncio.Task | None = None
 
     # ──────────────────────────────────────────────────
     # Lifecycle
@@ -85,12 +88,21 @@ class OracleApp:
         self.subscriber.on_control(self._on_control)
         self.subscriber.attach()
 
+        self._sync_task = asyncio.create_task(run_sync_loop(self._sync_stop))
         await self.mqtt.start()
         log.info("oracle_app_started")
 
     async def stop(self) -> None:
         self._stopping = True
         log.info("oracle_app_stopping", pending=len(self._pending))
+
+        # 0. auth sync loop 중단
+        self._sync_stop.set()
+        if self._sync_task is not None:
+            try:
+                await asyncio.wait_for(self._sync_task, timeout=2.0)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                pass
 
         # 1. MQTT 구독 해제 + 연결 종료
         await self.mqtt.stop()
