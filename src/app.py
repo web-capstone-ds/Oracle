@@ -20,6 +20,7 @@ Shutdown 순서 (CLAUDE.md §12.2):
 from __future__ import annotations
 
 import asyncio
+import copy
 
 from cache.alarm_counter import AlarmCounterCache, R33_KEY
 from cache.equipment_cache import EquipmentCache
@@ -67,6 +68,7 @@ class OracleApp:
         self._stopping = False
         self._sync_stop = asyncio.Event()
         self._sync_task: asyncio.Task | None = None
+        self._last_analysis_payload: dict[str, dict] = {}
 
     # ──────────────────────────────────────────────────
     # Lifecycle
@@ -180,9 +182,13 @@ class OracleApp:
         payload = dict(event.payload or {})
         payload.setdefault("operator_id", event.issued_by)
         if event.command == "APPROVE_THRESHOLD":
-            await handle_threshold_approval(payload)
+            proposal = await handle_threshold_approval(payload)
+            if proposal:
+                self._publish_threshold_proposal_result(equipment_id, proposal)
         elif event.command == "REJECT_THRESHOLD":
-            await handle_threshold_rejection(payload)
+            proposal = await handle_threshold_rejection(payload)
+            if proposal:
+                self._publish_threshold_proposal_result(equipment_id, proposal)
         else:
             log.debug("control_command_ignored", command=event.command, equipment_id=equipment_id)
 
@@ -212,6 +218,13 @@ class OracleApp:
             return
 
         yield_threshold = self.rule_cache.get_threshold(result.recipe_id, "R23")
+        threshold_proposal = None
+        if result.threshold_proposal:
+            threshold_proposal = dict(result.threshold_proposal)
+            threshold_proposal.setdefault("status", "PENDING")
+            threshold_proposal.setdefault("processed_by", None)
+            threshold_proposal.setdefault("processed_at", None)
+
         payload = build_oracle_analysis_payload(
             message_id=result.message_id,
             timestamp_iso=get_timestamp_utc_ms(),
@@ -227,18 +240,19 @@ class OracleApp:
             lot_report=result.lot_report,
             dynamic_threshold=result.dynamic_threshold,
             isolation_forest_score=result.isolation_forest_score,
-            threshold_proposal=result.threshold_proposal,
+            threshold_proposal=threshold_proposal,
         )
 
-        if result.threshold_proposal:
+        if threshold_proposal:
             try:
-                await rule_db.insert_threshold_proposal(result.threshold_proposal)
+                await rule_db.insert_threshold_proposal(threshold_proposal)
             except Exception as exc:
                 log.warning("threshold_proposal_insert_failed", lot_id=lot.lot_id, error=str(exc))
 
         # 발행 (QoS 2 + Retained=true)
         try:
             self.publisher.publish_analysis(equipment_id, payload)
+            self._last_analysis_payload[equipment_id] = copy.deepcopy(payload)
         except Exception as exc:
             log.error("publish_failed", lot_id=lot.lot_id, error=str(exc))
 
@@ -263,3 +277,54 @@ class OracleApp:
         if result.judgment == Judgment.NORMAL:
             for code in ("WRITE_FAIL", "VISION_SCORE_ERR", "LIGHT_PWR_LOW", R33_KEY):
                 self.alarm_counter.reset_consecutive(equipment_id, code)
+
+    def _publish_threshold_proposal_result(self, equipment_id: str, proposal: dict) -> None:
+        cached = self._last_analysis_payload.get(equipment_id)
+        if cached is None:
+            log.warning(
+                "threshold_proposal_result_publish_skipped",
+                equipment_id=equipment_id,
+                proposal_id=proposal.get("proposal_id"),
+                reason="last_analysis_payload_missing",
+            )
+            return
+
+        payload = copy.deepcopy(cached)
+        payload["timestamp"] = get_timestamp_utc_ms()
+        payload["threshold_proposal"] = _threshold_proposal_result_payload(proposal)
+
+        try:
+            self.publisher.publish_analysis(equipment_id, payload)
+            self._last_analysis_payload[equipment_id] = copy.deepcopy(payload)
+        except Exception as exc:
+            log.error(
+                "threshold_proposal_result_publish_failed",
+                equipment_id=equipment_id,
+                proposal_id=proposal.get("proposal_id"),
+                error=str(exc),
+            )
+
+
+def _threshold_proposal_result_payload(proposal: dict) -> dict:
+    status = str(proposal.get("status") or "").upper()
+    payload = {
+        "proposal_id": proposal.get("proposal_id"),
+        "recipe_id": proposal.get("recipe_id"),
+        "rule_id": proposal.get("rule_id"),
+        "metric": proposal.get("metric"),
+        "current_warning": proposal.get("current_warning"),
+        "current_critical": proposal.get("current_critical"),
+        "proposed_warning": proposal.get("proposed_warning"),
+        "proposed_critical": proposal.get("proposed_critical"),
+        "basis": proposal.get("basis"),
+        "lot_basis": proposal.get("lot_basis"),
+        "status": status,
+        "processed_by": proposal.get("processed_by"),
+        "processed_at": get_timestamp_utc_ms(),
+    }
+    if status == "APPROVED":
+        payload["applied_warning"] = proposal.get("proposed_warning")
+        payload["applied_critical"] = proposal.get("proposed_critical")
+    if status == "REJECTED":
+        payload["reason"] = proposal.get("reason") or ""
+    return payload

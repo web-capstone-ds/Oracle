@@ -4,7 +4,7 @@
 - 빈 페이로드 (ALARM_ACK retained clear) → 무시, 핸들러 호출 안 됨
 - JSON 디코딩 실패 → 무시, 핸들러 호출 안 됨, 예외 미전파
 - 미지원 event_type → 무시
-- 토픽 세그먼트 → 핸들러 라우팅 (lot/alarm/recipe/status)
+- 토픽 세그먼트 → 핸들러 라우팅 (lot/alarm/recipe/status/control)
 - 핸들러 내부 예외 → swallow + 로그 (전체 파이프라인 정지 금지)
 """
 
@@ -14,7 +14,7 @@ import json
 
 import pytest
 
-from models.events import HwAlarm, LotEnd, RecipeChanged, StatusUpdate
+from models.events import ControlCommand, HwAlarm, LotEnd, RecipeChanged, StatusUpdate
 from mqtt.subscriber import Subscriber
 
 
@@ -33,7 +33,7 @@ class _FakeMqtt:
 def _attach() -> tuple[Subscriber, _FakeMqtt, dict]:
     fake = _FakeMqtt()
     sub = Subscriber(fake)
-    captured: dict[str, list] = {"lot": [], "alarm": [], "recipe": [], "status": []}
+    captured: dict[str, list] = {"lot": [], "alarm": [], "recipe": [], "status": [], "control": []}
 
     async def on_lot(ev: LotEnd, eq: str) -> None:
         captured["lot"].append((ev, eq))
@@ -47,22 +47,27 @@ def _attach() -> tuple[Subscriber, _FakeMqtt, dict]:
     async def on_status(ev: StatusUpdate, eq: str) -> None:
         captured["status"].append((ev, eq))
 
+    async def on_control(ev: ControlCommand, eq: str) -> None:
+        captured["control"].append((ev, eq))
+
     sub.on_lot_end(on_lot)
     sub.on_alarm(on_alarm)
     sub.on_recipe(on_recipe)
     sub.on_status(on_status)
+    sub.on_control(on_control)
     sub.attach()
     return sub, fake, captured
 
 
-def test_attach_registers_4_topics_with_correct_qos():
-    """spec §3.1: status QoS 1, lot/alarm/recipe QoS 2."""
+def test_attach_registers_topics_with_correct_qos():
+    """spec §3.1: status QoS 1, lot/alarm/recipe/control QoS 2."""
     _, fake, _ = _attach()
     qos_map = dict(fake.subs)
     assert qos_map["ds/+/lot"] == 2
     assert qos_map["ds/+/alarm"] == 2
     assert qos_map["ds/+/recipe"] == 2
     assert qos_map["ds/+/status"] == 1
+    assert qos_map["ds/+/control"] == 2
     # ds/+/result 는 ACL 위반 — 구독 금지
     assert "ds/+/result" not in qos_map
 
@@ -126,6 +131,33 @@ async def test_lot_end_routed_to_lot_handler():
     assert eq == "DS-VIS-001"
     assert event.lot_id == "LOT-20260122-001"
     assert event.yield_pct == 96.2
+
+
+@pytest.mark.asyncio
+async def test_threshold_control_routed_to_control_handler():
+    """APPROVE_THRESHOLD → on_control 핸들러 호출, nested payload 유지."""
+    _, fake, captured = _attach()
+    body = json.dumps(
+        {
+            "message_id": "00000000-0000-0000-0000-000000000100",
+            "event_type": "CONTROL_CMD",
+            "timestamp": "2026-01-22T17:42:15.123Z",
+            "equipment_id": "DS-VIS-001",
+            "command": "APPROVE_THRESHOLD",
+            "issued_by": "MES_SERVER",
+            "payload": {
+                "proposal_id": "prop-test",
+                "approved_by": "operator01",
+            },
+        }
+    ).encode("utf-8")
+    await fake.handler("ds/DS-VIS-001/control", body, 2, False)
+
+    assert len(captured["control"]) == 1
+    event, eq = captured["control"][0]
+    assert eq == "DS-VIS-001"
+    assert event.command == "APPROVE_THRESHOLD"
+    assert event.payload["proposal_id"] == "prop-test"
 
 
 @pytest.mark.asyncio

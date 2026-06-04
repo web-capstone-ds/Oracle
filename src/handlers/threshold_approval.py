@@ -9,20 +9,20 @@ from utils.logging_config import get_logger
 log = get_logger(__name__)
 
 
-async def handle_threshold_approval(payload: dict) -> None:
+async def handle_threshold_approval(payload: dict) -> dict | None:
     proposal_id = payload.get("proposal_id")
     approved_by = payload.get("approved_by") or payload.get("operator_id") or "unknown"
     if not proposal_id:
         log.warning("threshold_approval_missing_proposal_id")
-        return
+        return None
 
     proposal = await rule_db.load_threshold_proposal(proposal_id)
     if not proposal:
         log.warning("threshold_proposal_not_found", proposal_id=proposal_id)
-        return
+        return None
     if proposal["status"] != "pending":
         log.info("threshold_proposal_already_processed", proposal_id=proposal_id)
-        return
+        return None
 
     await rule_db.update_threshold(
         recipe_id=proposal["recipe_id"],
@@ -51,19 +51,24 @@ async def handle_threshold_approval(payload: dict) -> None:
         processed_by=approved_by,
     )
     log.info("threshold_proposal_approved", proposal_id=proposal_id, approved_by=approved_by)
+    return {
+        **proposal,
+        "status": "approved",
+        "processed_by": approved_by,
+    }
 
 
-async def handle_threshold_rejection(payload: dict) -> None:
+async def handle_threshold_rejection(payload: dict) -> dict | None:
     proposal_id = payload.get("proposal_id")
     rejected_by = payload.get("rejected_by") or payload.get("operator_id") or "unknown"
     reason = payload.get("reason", "")
     if not proposal_id:
         log.warning("threshold_rejection_missing_proposal_id")
-        return
+        return None
 
     proposal = await rule_db.load_threshold_proposal(proposal_id)
     if not proposal or proposal["status"] != "pending":
-        return
+        return None
 
     await rule_db.insert_change_history(
         recipe_id=proposal["recipe_id"],
@@ -83,4 +88,9 @@ async def handle_threshold_rejection(payload: dict) -> None:
         processed_by=rejected_by,
     )
     log.info("threshold_proposal_rejected", proposal_id=proposal_id, rejected_by=rejected_by)
-
+    return {
+        **proposal,
+        "status": "rejected",
+        "processed_by": rejected_by,
+        "reason": reason,
+    }

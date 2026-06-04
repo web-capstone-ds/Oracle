@@ -12,6 +12,7 @@ from engine.secondary_validator import (
     evaluate_if,
     threshold_to_dict,
 )
+from app import _threshold_proposal_result_payload
 from models.judgment import Judgment, RuleLevel, ViolatedRule
 from models.oracle_analysis import build_oracle_analysis_payload
 
@@ -167,3 +168,38 @@ def test_phase2_payload_fields_are_active():
     assert payload["isolation_forest_score"] == 0.42
     assert payload["threshold_proposal"]["proposal_id"] == "prop-test"
 
+
+def test_threshold_proposal_result_payload_approved():
+    payload = _threshold_proposal_result_payload(
+        {
+            "proposal_id": "prop-test",
+            "recipe_id": "Carsem_4X6",
+            "rule_id": "R23",
+            "metric": "yield_pct",
+            "current_warning": 90.0,
+            "proposed_warning": 65.0,
+            "proposed_critical": 58.0,
+            "status": "approved",
+            "processed_by": "operator01",
+        }
+    )
+    assert payload["status"] == "APPROVED"
+    assert payload["processed_by"] == "operator01"
+    assert payload["applied_warning"] == 65.0
+    assert payload["applied_critical"] == 58.0
+    assert payload["processed_at"].endswith("Z")
+
+
+def test_threshold_proposal_result_payload_rejected():
+    payload = _threshold_proposal_result_payload(
+        {
+            "proposal_id": "prop-test",
+            "metric": "yield_pct",
+            "status": "rejected",
+            "processed_by": "operator01",
+            "reason": "현장 조건과 불일치",
+        }
+    )
+    assert payload["status"] == "REJECTED"
+    assert payload["reason"] == "현장 조건과 불일치"
+    assert "applied_warning" not in payload

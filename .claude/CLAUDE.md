@@ -133,7 +133,7 @@ C:\Hansung_Project\WebCapstone\        ← 공통 부모 디렉토리
 | QoS | 대상 토픽 | 이유 |
 |:---|:---|:---|
 | QoS 1 | `ds/+/status` | 주기적 발행, 1회 누락 허용 |
-| QoS 2 | `ds/+/lot`, `ds/+/alarm`, `ds/+/recipe` | 정확히 1회 전달 보장 필수 |
+| QoS 2 | `ds/+/lot`, `ds/+/alarm`, `ds/+/recipe`, `ds/+/control` | 정확히 1회 전달 보장 필수 |
 
 > **INSPECTION_RESULT 직접 구독 안 함**: Oracle은 Historian TSDB를 경유하여 LOT 단위로 일괄 조회한다. 실시간 처리 부하에서 자유로워 복잡한 분석을 수행하기 위함이다.
 
@@ -163,10 +163,10 @@ client.connect(
 | 항목 | 값 |
 |:---|:---|
 | 계정 | `oracle` |
-| Subscribe 허용 | `ds/+/lot`, `ds/+/alarm`, `ds/+/recipe`, `ds/+/status` |
+| Subscribe 허용 | `ds/+/lot`, `ds/+/alarm`, `ds/+/recipe`, `ds/+/status`, `ds/+/control` |
 | Publish 허용 | `ds/+/oracle` |
 
-> **주의:** `oracle` 계정으로 lot/alarm/recipe/status 이외 토픽 Subscribe 또는 oracle 이외 토픽 Publish 시도 금지 (ACL 위반).
+> **주의:** `oracle` 계정으로 lot/alarm/recipe/status/control 이외 토픽 Subscribe 또는 oracle 이외 토픽 Publish 시도 금지 (ACL 위반).
 
 #### 1.2.5 재연결 백오프
 
