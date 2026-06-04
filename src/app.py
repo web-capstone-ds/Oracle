@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import uuid
 
 from cache.alarm_counter import AlarmCounterCache, R33_KEY
 from cache.equipment_cache import EquipmentCache
@@ -245,7 +246,21 @@ class OracleApp:
 
         if threshold_proposal:
             try:
-                await rule_db.insert_threshold_proposal(threshold_proposal)
+                already_pending = await rule_db.has_pending_proposal(
+                    threshold_proposal["recipe_id"],
+                    threshold_proposal["rule_id"],
+                )
+                if already_pending:
+                    log.info(
+                        "threshold_proposal_skipped_pending_exists",
+                        lot_id=lot.lot_id,
+                        recipe_id=threshold_proposal["recipe_id"],
+                        rule_id=threshold_proposal["rule_id"],
+                    )
+                    threshold_proposal = None
+                    payload["threshold_proposal"] = None
+                else:
+                    await rule_db.insert_threshold_proposal(threshold_proposal)
             except Exception as exc:
                 log.warning("threshold_proposal_insert_failed", lot_id=lot.lot_id, error=str(exc))
 
@@ -281,17 +296,32 @@ class OracleApp:
     def _publish_threshold_proposal_result(self, equipment_id: str, proposal: dict) -> None:
         cached = self._last_analysis_payload.get(equipment_id)
         if cached is None:
+            # Oracle이 재시작된 경우 캐시가 없으므로 threshold_proposal 결과만 담은 최소 payload를 구성한다.
+            payload = {
+                "message_id": str(uuid.uuid4()),
+                "event_type": "ORACLE_ANALYSIS",
+                "timestamp": get_timestamp_utc_ms(),
+                "equipment_id": equipment_id,
+                "lot_id": None,
+                "recipe_id": proposal.get("recipe_id"),
+                "judgment": None,
+                "ai_comment": None,
+                "threshold_proposal": _threshold_proposal_result_payload(proposal),
+                "isolation_forest_score": None,
+                "violated_rules": [],
+                "lot_report": None,
+                "yield_status": None,
+            }
             log.warning(
-                "threshold_proposal_result_publish_skipped",
+                "threshold_proposal_result_minimal_payload",
                 equipment_id=equipment_id,
                 proposal_id=proposal.get("proposal_id"),
                 reason="last_analysis_payload_missing",
             )
-            return
-
-        payload = copy.deepcopy(cached)
-        payload["timestamp"] = get_timestamp_utc_ms()
-        payload["threshold_proposal"] = _threshold_proposal_result_payload(proposal)
+        else:
+            payload = copy.deepcopy(cached)
+            payload["timestamp"] = get_timestamp_utc_ms()
+            payload["threshold_proposal"] = _threshold_proposal_result_payload(proposal)
 
         try:
             self.publisher.publish_analysis(equipment_id, payload)

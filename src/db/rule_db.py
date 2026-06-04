@@ -172,6 +172,23 @@ async def insert_change_history(
         await conn.commit()
 
 
+async def has_pending_proposal(recipe_id: str, rule_id: str) -> bool:
+    """같은 recipe_id + rule_id에 대해 pending 상태 제안이 이미 존재하는지 확인한다."""
+    pool = oracle_pool()
+    async with pool.connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                """
+                SELECT 1 FROM threshold_proposals
+                WHERE recipe_id = %s AND rule_id = %s AND status = 'pending'
+                LIMIT 1
+                """,
+                (recipe_id, rule_id),
+            )
+            row = await cur.fetchone()
+    return row is not None
+
+
 async def insert_threshold_proposal(proposal: dict[str, Any]) -> None:
     pool = oracle_pool()
     async with pool.connection() as conn:
