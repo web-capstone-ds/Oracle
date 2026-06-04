@@ -294,45 +294,65 @@ class OracleApp:
                 self.alarm_counter.reset_consecutive(equipment_id, code)
 
     def _publish_threshold_proposal_result(self, equipment_id: str, proposal: dict) -> None:
-        cached = self._last_analysis_payload.get(equipment_id)
-        if cached is None:
-            # Oracle이 재시작된 경우 캐시가 없으므로 threshold_proposal 결과만 담은 최소 payload를 구성한다.
-            payload = {
-                "message_id": str(uuid.uuid4()),
-                "event_type": "ORACLE_ANALYSIS",
-                "timestamp": get_timestamp_utc_ms(),
-                "equipment_id": equipment_id,
-                "lot_id": None,
-                "recipe_id": proposal.get("recipe_id"),
-                "judgment": None,
-                "ai_comment": None,
-                "threshold_proposal": _threshold_proposal_result_payload(proposal),
-                "isolation_forest_score": None,
-                "violated_rules": [],
-                "lot_report": None,
-                "yield_status": None,
-            }
-            log.warning(
-                "threshold_proposal_result_minimal_payload",
-                equipment_id=equipment_id,
-                proposal_id=proposal.get("proposal_id"),
-                reason="last_analysis_payload_missing",
-            )
-        else:
-            payload = copy.deepcopy(cached)
-            payload["timestamp"] = get_timestamp_utc_ms()
-            payload["threshold_proposal"] = _threshold_proposal_result_payload(proposal)
+        # 임계값 제안은 (recipe_id, rule_id) 단위로만 식별되며 장비 정보가 없다.
+        # 같은 레시피를 도는 여러 장비가 모바일에 동일 제안 카드를 띄우므로, 승인/거부
+        # 결과는 명령 대상 장비뿐 아니라 그 제안을 PENDING으로 표시 중인 모든 장비
+        # 토픽에 재발행해야 전 라인 카드가 즉시 사라진다.
+        result_tp = _threshold_proposal_result_payload(proposal)
+        recipe_id = proposal.get("recipe_id")
+        rule_id = proposal.get("rule_id")
 
-        try:
-            self.publisher.publish_analysis(equipment_id, payload)
-            self._last_analysis_payload[equipment_id] = copy.deepcopy(payload)
-        except Exception as exc:
-            log.error(
-                "threshold_proposal_result_publish_failed",
-                equipment_id=equipment_id,
-                proposal_id=proposal.get("proposal_id"),
-                error=str(exc),
-            )
+        targets: set[str] = {equipment_id}
+        for eq, cached in self._last_analysis_payload.items():
+            tp = cached.get("threshold_proposal") if isinstance(cached, dict) else None
+            if (
+                isinstance(tp, dict)
+                and tp.get("recipe_id") == recipe_id
+                and tp.get("rule_id") == rule_id
+                and str(tp.get("status") or "").upper() == "PENDING"
+            ):
+                targets.add(eq)
+
+        for eq in targets:
+            cached = self._last_analysis_payload.get(eq)
+            if cached is None:
+                # Oracle이 재시작된 경우 캐시가 없으므로 threshold_proposal 결과만 담은 최소 payload를 구성한다.
+                payload = {
+                    "message_id": str(uuid.uuid4()),
+                    "event_type": "ORACLE_ANALYSIS",
+                    "timestamp": get_timestamp_utc_ms(),
+                    "equipment_id": eq,
+                    "lot_id": None,
+                    "recipe_id": recipe_id,
+                    "judgment": None,
+                    "ai_comment": None,
+                    "threshold_proposal": result_tp,
+                    "isolation_forest_score": None,
+                    "violated_rules": [],
+                    "lot_report": None,
+                    "yield_status": None,
+                }
+                log.warning(
+                    "threshold_proposal_result_minimal_payload",
+                    equipment_id=eq,
+                    proposal_id=proposal.get("proposal_id"),
+                    reason="last_analysis_payload_missing",
+                )
+            else:
+                payload = copy.deepcopy(cached)
+                payload["timestamp"] = get_timestamp_utc_ms()
+                payload["threshold_proposal"] = result_tp
+
+            try:
+                self.publisher.publish_analysis(eq, payload)
+                self._last_analysis_payload[eq] = copy.deepcopy(payload)
+            except Exception as exc:
+                log.error(
+                    "threshold_proposal_result_publish_failed",
+                    equipment_id=eq,
+                    proposal_id=proposal.get("proposal_id"),
+                    error=str(exc),
+                )
 
 
 def _threshold_proposal_result_payload(proposal: dict) -> dict:
