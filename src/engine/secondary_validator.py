@@ -6,6 +6,7 @@ import uuid
 from dataclasses import dataclass
 from typing import Any
 
+from cache.rule_cache import RuleCache
 from db import lot_history
 from engine.ewma_mad import DynamicThreshold, compute_dynamic_threshold
 from engine.feature_extractor import LotFeatureVector, extract_features
@@ -36,6 +37,7 @@ async def validate_secondary(
     alarm_counter: dict[str, Any],
     *,
     recipe_id: str,
+    rule_cache: RuleCache | None = None,
 ) -> SecondaryResult:
     features = extract_features(lot_end_event, inspection_records, alarm_counter)
     lot_count = await lot_history.count_recipe_lots(recipe_id)
@@ -62,7 +64,14 @@ async def validate_secondary(
     )
     ewma_judgment = evaluate_ewma(float(_get(lot_end_event, "yield_pct") or 0.0), dt)
     dynamic_threshold = threshold_to_dict(dt)
-    proposal = build_threshold_proposal(recipe_id, "R23", dt)
+    current = rule_cache.get_threshold(recipe_id, "R23") if rule_cache else None
+    proposal = build_threshold_proposal(
+        recipe_id,
+        "R23",
+        dt,
+        current_warning=current.warning_threshold if current else None,
+        current_critical=current.critical_threshold if current else None,
+    )
 
     if lot_count < 10:
         return SecondaryResult(

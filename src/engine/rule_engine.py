@@ -405,6 +405,7 @@ class RuleEngine:
                 records,
                 alarm_snapshot,
                 recipe_id=recipe_id,
+                rule_cache=self.rule_cache,
             )
             try:
                 from db import lot_history
